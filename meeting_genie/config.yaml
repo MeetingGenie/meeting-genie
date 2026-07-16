@@ -1,0 +1,70 @@
+# MeetingGenie config — behavior is data, code stays put.
+# Tune these the night before the demo without touching a .py file.
+
+audio:
+  sample_rate: 16000          # what whisper wants; sources resample to this
+  vad_frame_ms: 30            # 20-30ms frames, NOT 1-second chunks
+  calibrate_seconds: 2.0      # measure noise floor at startup
+  noise_floor_multiplier: 3.0 # silence threshold = measured floor * this (never hardcode 0.012 again)
+
+transcribe:
+  model: "small.en"           # accuracy > speed for accents; drop to base.en only if CPU can't keep up
+  compute_type: "int8"
+  # initial_prompt is built from glossary.terms below + these extras:
+  prompt_extras: "This is a work meeting transcript."
+
+glossary:
+  fuzzy_threshold: 0.85       # auto-replace above this similarity
+  terms:                      # fill with real vocab: names, cities, products, jargon
+    - Hyderabad
+    - Apexon
+    - Devansh
+    - Meesha
+    - MeetingGenie
+
+correction:
+  confidence_gate: 0.88       # segments above this skip correction entirely
+  echo_dedup_window_ms: 1000  # no-headphones mode: mic text matching loopback text within this window = echo, drop
+  echo_dedup_similarity: 0.80
+
+trigger:
+  threshold: 3.0
+  silence_ms: 1200            # the struggle signal
+  min_words: 3
+  max_words: 40
+  signals:
+    ends_with_question_mark: 2.0
+    starts_with_interrogative: 2.0    # what why how when where who which
+    starts_with_auxiliary: 1.5        # is/are/do/does/can/could/would + pronoun, SENTENCE START ONLY
+    silence_after: 2.0
+    user_filler_words: 1.0            # "um", "uh" from the me track
+    length_in_range: 0.5
+    tag_question: -3.0                # "...right?" "...make sense?"
+    first_person_intent: -2.0         # "should I share my screen"
+    user_already_answering: -5.0      # me track went hot -> kill
+
+brain:
+  model: "llama3.1:8b"
+  ollama_url: "http://localhost:11434/api/chat"
+  num_predict: 80             # popup answers are 2-3 sentences; generation time is linear in length
+  stream: true
+  prewarm_on_start: true
+  system_prompt: >
+    You suggest short spoken answers during a live meeting. The transcript comes from
+    imperfect speech recognition: proper nouns may be garbled, infer intent from context.
+    Answer in 2-3 sentences the user could say out loud. No preamble, no markdown.
+
+summarize:
+  interval_seconds: 180       # open question for Meesha: 2 min or 5?
+  max_bullets: 8
+
+overlay:
+  hotkey: "ctrl+shift+space"  # open question: check for Teams/Meet collisions
+  stale_seconds: 20
+  quiet_mode_default: false
+
+mode:
+  headphones: true            # false enables echo dedup + correlation gating (post-MVP)
+
+output:
+  meetings_dir: "meetings"

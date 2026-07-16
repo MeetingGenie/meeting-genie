@@ -1,0 +1,18 @@
+# speaker | silence_after_ms | text
+# Scripted meeting for testing the trigger. Covers:
+# direct question + silence (SHOULD fire), rhetorical (should NOT),
+# tag question (should NOT), back-to-back questions, user answering fast (should NOT).
+
+them | 400  | Hi Devansh, thanks for joining, can you hear me okay?
+me   | 300  | Yes, loud and clear.
+them | 500  | Great. So this is not working the way we expected, honestly.
+them | 600  | We reviewed the pipeline yesterday and the latency numbers look fine, right?
+them | 700  | Anyway, let me get to the point.
+them | 1500 | What approach did you use for handling different accents in the transcription?
+me   | 400  | We used a phonetic glossary with fuzzy matching, plus vocabulary biasing in Whisper.
+them | 300  | Okay interesting. And how does the correction layer decide when to call the LLM? What happens if confidence is high?
+them | 1800 | Devansh, are you there?
+me   | 500  | Sorry, yes. The correction layer is gated on Whisper confidence.
+them | 400  | Makes sense. Should I share my screen to show the dashboard?
+me   | 600  | Sure, go ahead.
+them | 2000 | One last thing, what is the plan for deploying this to Hyderabad office?
