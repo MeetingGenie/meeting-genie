@@ -29,7 +29,7 @@ correction:
 
 trigger:
   threshold: 3.0
-  silence_ms: 1200            # the struggle signal
+  silence_ms: 2000            # the struggle signal
   min_words: 3
   max_words: 40
   signals:
