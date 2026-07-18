@@ -12,6 +12,8 @@ transcribe:
   compute_type: "int8"
   # initial_prompt is built from glossary.terms below + these extras:
   prompt_extras: "This is a work meeting transcript."
+  silence_rms_threshold: 150  # energy below this = silence. TUNE against a real recording.
+  segment_silence_ms: 600     # how long someone must pause before we cut the utterance
 
 glossary:
   fuzzy_threshold: 0.85       # auto-replace above this similarity
