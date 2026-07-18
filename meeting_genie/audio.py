@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import platform
 import queue
+from queue import Empty
 import threading
 import time
 import wave
@@ -295,6 +296,43 @@ class AudioRecorder:
     def is_running(self) -> bool:
         """Return whether the recorder is currently running."""
         return self._running
+    
+    def get_mic_chunk(self, timeout: float = 0.1) -> AudioChunk | None:
+        """
+        Return the next microphone AudioChunk.
+
+        Args:
+            timeout: Seconds to wait for a chunk before returning None.
+
+        Returns:
+            The next AudioChunk if available, otherwise None.
+        """
+        try:
+            return self._mic_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+
+    def get_loopback_chunk(self, timeout: float = 0.1) -> AudioChunk | None:
+        """
+        Return the next loopback AudioChunk.
+
+        Args:
+            timeout: Seconds to wait for a chunk before returning None.
+
+        Returns:
+            The next AudioChunk if available, otherwise None.
+        """
+        try:
+            return self._loopback_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+    
+    def mic_queue_size(self) -> int:
+        return self._mic_queue.qsize()
+
+    def loopback_queue_size(self) -> int:
+        return self._loopback_queue.qsize()
 
     def start_mic(self) -> None:
         """Start the microphone input stream with SoundDevice."""
@@ -506,4 +544,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
