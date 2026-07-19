@@ -48,7 +48,11 @@ class Segmenter:
         self.cfg = cfg
         self.source = source
         t = cfg["transcribe"]
-        self.silence_rms = t["silence_rms_threshold"]
+        # mic and loopback have very different noise floors - a shared
+        # threshold made the mic classify room noise as speech, which Whisper
+        # then hallucinated into repeats of the initial_prompt.
+        key = "mic_silence_rms" if source == "mic" else "loopback_silence_rms"
+        self.silence_rms = t[key]
         self.segment_silence_ms = t["segment_silence_ms"]
         self.chunk_ms = cfg["audio"]["vad_frame_ms"]
         self._buffer = []          # list of numpy arrays, current utterance so far
@@ -156,12 +160,43 @@ def process_segment(source, audio_16k, start_ts, silence_after_ms, cfg):
         return None
     return make_utterance(source, text, confidence, start_ts, silence_after_ms)
 
+def _whisper_worker(work_queue, cfg, on_utterance):
+    """Runs on its own thread. Pulls finished segments off work_queue and
+    does the (slow) Whisper call here - so the capture loop below never
+    waits on transcription and never misses incoming audio while Whisper
+    is busy. This is what fixed segments getting dropped/delayed."""
+    while True:
+        item = work_queue.get()
+        if item is None:  # sentinel to stop the thread
+            break
+        source, audio, start_ts, silence_ms = item
+        u = process_segment(source, audio, start_ts, silence_ms, cfg)
+        if u is not None:
+            on_utterance(u)
+
+
 def run_transcription_loop(recorder, cfg, on_utterance):
     """recorder: a running audio.AudioRecorder. on_utterance: callback that
     takes one Utterance, called whenever mic or loopback produces a finished
-    sentence. Runs forever until recorder.stop() is called elsewhere."""
+    sentence. Runs forever until recorder.stop() is called elsewhere.
+
+    Whisper transcription happens on a SEPARATE thread from chunk reading.
+    Segmentation (buffering + silence detection) is cheap and stays in this
+    loop; the slow part (process_segment, which calls faster-whisper) gets
+    handed off to _whisper_worker via a queue. Without this split, a single
+    slow transcription call would stall get_mic_chunk/get_loopback_chunk and
+    audio arriving during that stall would be delayed or lost."""
+    import queue
+    import threading
+
     mic_seg = Segmenter(cfg, "mic")
     loop_seg = Segmenter(cfg, "loopback")
+    work_queue = queue.Queue()
+
+    worker = threading.Thread(
+        target=_whisper_worker, args=(work_queue, cfg, on_utterance), daemon=True
+    )
+    worker.start()
 
     while recorder.is_running():
         got_something = False
@@ -173,9 +208,7 @@ def run_transcription_loop(recorder, cfg, on_utterance):
             result = mic_seg.feed(samples, mic_chunk.timestamp)
             if result is not None:
                 audio, start_ts, silence_ms = result
-                u = process_segment("mic", audio, start_ts, silence_ms, cfg)
-                if u is not None:
-                    on_utterance(u)
+                work_queue.put(("mic", audio, start_ts, silence_ms))
 
         loop_chunk = recorder.get_loopback_chunk()
         if loop_chunk is not None:
@@ -184,9 +217,9 @@ def run_transcription_loop(recorder, cfg, on_utterance):
             result = loop_seg.feed(samples, loop_chunk.timestamp)
             if result is not None:
                 audio, start_ts, silence_ms = result
-                u = process_segment("loopback", audio, start_ts, silence_ms, cfg)
-                if u is not None:
-                    on_utterance(u)
+                work_queue.put(("loopback", audio, start_ts, silence_ms))
 
         if not got_something:
             time.sleep(0.01)
+
+    work_queue.put(None)  # stop the worker thread cleanly
