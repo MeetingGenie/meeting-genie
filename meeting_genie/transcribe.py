@@ -100,7 +100,15 @@ def _get_model(cfg):
     if _whisper_model is None:
         from faster_whisper import WhisperModel
         t = cfg["transcribe"]
-        _whisper_model = WhisperModel(t["model"], compute_type=t["compute_type"])
+        # cpu_threads capped so Whisper doesn't grab every core - on a laptop,
+        # leaving it unset let it compete with the real-time audio callback
+        # for CPU scheduling and caused PortAudio "input overflow" (audio
+        # buffer not drained in time). 2 leaves room for capture + everything
+        # else. Tune down further if overflow persists, up if transcription
+        # feels too slow once overflow is confirmed gone.
+        _whisper_model = WhisperModel(
+            t["model"], compute_type=t["compute_type"], cpu_threads=2
+        )
     return _whisper_model
 
 

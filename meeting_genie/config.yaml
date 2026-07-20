@@ -3,7 +3,7 @@
 
 audio:
   sample_rate: 16000          # what whisper wants; sources resample to this
-  vad_frame_ms: 30            # 20-30ms frames, NOT 1-second chunks
+  vad_frame_ms: 60            # bumped from 30 - fewer audio callbacks/sec to reduce input overflow
   calibrate_seconds: 2.0      # measure noise floor at startup
   noise_floor_multiplier: 3.0 # silence threshold = measured floor * this (never hardcode 0.012 again)
 
