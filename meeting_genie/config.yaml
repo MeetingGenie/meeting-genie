@@ -57,6 +57,16 @@ brain:
 summarize:
   interval_seconds: 180       # open question for Meesha: 2 min or 5?
   max_bullets: 8
+  model: "llama3.1:8b"
+  ollama_url: "http://localhost:11434/api/chat"
+  num_predict: 300
+  system_prompt: >
+    You maintain a running bullet-point summary of a live meeting. You'll get
+    the previous summary (may be empty, if this is the first update) and the
+    new raw conversation since then. Merge them into an updated summary of at
+    most {max_bullets} bullets, covering the whole meeting so far, most
+    important points first. Reply with ONLY a JSON object of this exact shape,
+    nothing else: {{"bullets": ["point one", "point two", ...]}}
 
 overlay:
   hotkey: "ctrl+shift+space"  # open question: check for Teams/Meet collisions
