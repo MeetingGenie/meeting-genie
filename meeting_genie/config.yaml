@@ -68,3 +68,30 @@ mode:
 
 output:
   meetings_dir: "meetings"
+
+brain:
+
+  host: "http://127.0.0.1:11434"
+
+  model: "llama3.1:8b"
+
+  temperature: 0.2
+
+  top_p: 0.9
+
+  num_predict: 96
+
+  timeout: 120
+
+  prewarm_prompt: "Reply only with OK."
+
+  system_prompt: |
+    You are MeetingGenie.
+
+    Help the user answer questions during meetings.
+
+    Answer briefly.
+
+logging:
+
+  suggestions_file: "meetings/suggestions.json"
