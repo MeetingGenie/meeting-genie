@@ -12,6 +12,7 @@ transcribe:
   compute_type: "int8"
   # initial_prompt is built from glossary.terms below + these extras:
   prompt_extras: "This is a work meeting transcript."
+  cpu_threads: 4              # bumped from 2 (fixed overflow but was slow). STILL A GUESS - tune against real core count.
   # Separate thresholds - loopback is a clean digital signal, mic picks up
   # real room noise/hum/distance. One shared number was wrong for the mic
   # and caused Whisper to hallucinate the initial_prompt back as "speech"

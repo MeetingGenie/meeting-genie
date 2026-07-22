@@ -100,14 +100,16 @@ def _get_model(cfg):
     if _whisper_model is None:
         from faster_whisper import WhisperModel
         t = cfg["transcribe"]
-        # cpu_threads capped so Whisper doesn't grab every core - on a laptop,
-        # leaving it unset let it compete with the real-time audio callback
-        # for CPU scheduling and caused PortAudio "input overflow" (audio
-        # buffer not drained in time). 2 leaves room for capture + everything
-        # else. Tune down further if overflow persists, up if transcription
-        # feels too slow once overflow is confirmed gone.
+        # cpu_threads: unset let Whisper grab every core, competing with the
+        # real-time audio callback for CPU scheduling -> "input overflow".
+        # 2 fixed overflow but made transcription noticeably slower - bumped
+        # to 4 as a middle ground. STILL A GUESS. If overflow comes back,
+        # lower this. If it's fine, try raising further based on Meesha's
+        # actual core count (Task Manager -> Performance, or
+        # `echo %NUMBER_OF_PROCESSORS%` in cmd).
         _whisper_model = WhisperModel(
-            t["model"], compute_type=t["compute_type"], cpu_threads=2
+            t["model"], compute_type=t["compute_type"],
+            cpu_threads=t.get("cpu_threads", 4),
         )
     return _whisper_model
 
