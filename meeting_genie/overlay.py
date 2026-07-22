@@ -48,6 +48,7 @@ class Overlay:
         self.state = OverlayState.IDLE
         self.message_queue = queue.Queue()
         self.current_text = ""
+        self.pending_text = ""
         # Overlay lifetime
         self.minimum_display_seconds = 8
         self.maximum_display_seconds = 25
@@ -187,36 +188,72 @@ class Overlay:
 
 
     def show_message(self,message: str) -> None:
-        self.message_queue.put(("replace",message))
+        self.message_queue.put(("replace", message))
 
 
     def show_loading(self) -> None:
         """
-        Display a loading message while the LLM
-        prepares its response.
+        Start a new response.
+        Clears any previous pending/displayed answer.
         """
+        self.pending_text = ""
+        self.current_text = ""
         self.show_message("Thinking...")
 
+    def append_text(self, text: str) -> None:
+        self.message_queue.put(("append", text))
 
-    def append_text(self,text: str) -> None:
-        self.message_queue.put(("append",text))
+    def expand(self) -> None:
+        """
+        Request the overlay to expand.
+
+        Thread-safe.
+        """
+        self.message_queue.put(("expand", None))
 
 
+    def collapse(self) -> None:
+        """
+        Request the overlay to collapse.
+        Thread-safe.
+        """
+        self.message_queue.put(("collapse", None))
+
+
+    def has_pending_content(self) -> bool:
+        """
+        Returns True if an unseen answer exists.
+        """
+        return bool(self.pending_text.strip())
     def _process_queue(self) -> None:
         updated = False
         while not self.message_queue.empty():
             action, payload = self.message_queue.get_nowait()
             if action == "replace":
-                self.current_text = payload
+                self.pending_text = payload
+                updated = True
             elif action == "append":
-                self.current_text += payload
-            updated = True
-        if updated:
+                self.pending_text += payload
+                updated = True
+            elif action == "expand":
+                self.current_text = self.pending_text
+                self.message_label.config(text=self.current_text,wraplength=self.window_width - 40,)
+                height = self._calculate_window_height()
+                self._position_window(self.window_width,height,)
+                self.set_state(OverlayState.EXPANDED)
+                self._restart_stale_timer()
+            elif action == "collapse":
+                self.set_state(OverlayState.READY)
+        # Keep streaming if already open.
+        if updated and self.state == OverlayState.EXPANDED:
+            self.current_text = self.pending_text
             self.message_label.config(text=self.current_text,wraplength=self.window_width - 40,)
             height = self._calculate_window_height()
             self._position_window(self.window_width,height,)
-            self.set_state(OverlayState.EXPANDED)
             self._restart_stale_timer()
+        # Stay READY if hidden.
+        elif updated and self.state == OverlayState.READY:
+            pass
         if self.running:
             self.root.after(50,self._process_queue,)
 
@@ -251,8 +288,10 @@ class Overlay:
             self._fade_after_id = self.root.after(self.fade_interval_ms,self._fade,)
         else:
             self.platform_window.reset_opacity()
+            self.platform_window.reset_opacity()
+            self.current_text = ""
+            self.pending_text = ""
             self.set_state(OverlayState.READY)
-
 
     def start(self) -> None:
         """
