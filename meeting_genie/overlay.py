@@ -32,12 +32,6 @@ from tkinter import font
 
 DEV_MODE = True
 
-
-if platform.system() != "Windows":
-    raise NotImplementedError(
-        "MeetingGenie overlay currently supports Windows only.")
-
-
 class OverlayState(Enum):
     IDLE = "idle"
     READY = "ready"
@@ -55,7 +49,9 @@ class Overlay:
         self.message_queue = queue.Queue()
         self.current_text = ""
         # Overlay lifetime
-        self.stale_seconds = 8
+        self.minimum_display_seconds = 8
+        self.maximum_display_seconds = 25
+        self.words_per_second = 3
         self.fade_steps = 10
         self.fade_interval_ms = 60
         self._stale_after_id = None
@@ -64,7 +60,11 @@ class Overlay:
         self.pill_width = 220
         self.pill_height = 55
         self.window_width = 500
-        self.window_height = 180
+        self.window_width = 500
+        # Dynamic popup height
+        self.minimum_window_height = 180
+        self.maximum_window_height = 450
+        self.line_height = 22
         self.top_margin = 40
         self.right_margin = 30
         # Create root
@@ -77,6 +77,17 @@ class Overlay:
         self._create_widgets()
         self.set_state(OverlayState.READY)
         self.root.after(50,self._process_queue)
+
+    def _calculate_window_height(self) -> int:
+        """
+        Grow the popup as more text arrives.
+
+        Stops growing once maximum height is reached.
+        """
+        lines = self.current_text.count("\n") + 1
+
+        estimated = (self.minimum_window_height+ lines * self.line_height)
+        return min(max(estimated,self.minimum_window_height,),self.maximum_window_height,)
 
 
     def _create_window(self) -> None:
@@ -101,8 +112,6 @@ class Overlay:
         self.user32 = ctypes.windll.user32
 
 
-
-
     def _configure_macos(self) -> None:
         """
         macOS-specific window configuration.
@@ -112,10 +121,12 @@ class Overlay:
         """
         pass
 
+    def _calculate_display_time(self):
+        words = len(self.current_text.split())
+        seconds = max(self.minimum_display_seconds, words / self.words_per_second)
+        return min(seconds, self.maximum_display_seconds)
 
     def _create_fonts(self):
-
-
         self.title_font = font.Font(family="Segoe UI",size=14,weight="bold")
         self.message_font = font.Font(family="Segoe UI",size=11)
 
@@ -163,12 +174,12 @@ class Overlay:
             self.pill_frame.pack(fill="both",expand=True)
             self.platform_window.show()
         elif state == OverlayState.EXPANDED:
-            self._position_window(self.window_width,self.window_height)
+            self._position_window(self.window_width,self._calculate_window_height(),)
             self.expanded_frame.pack(fill="both",expand=True)
             self.platform_window.show()
         elif state == OverlayState.LOADING:
             self.message_label.config(text="Thinking...")
-            self._position_window(self.window_width,self.window_height)
+            self._position_window(self.window_width,self._calculate_window_height(),)
             self.expanded_frame.pack(fill="both",expand=True )
             self.platform_window.show()
         elif state == OverlayState.STALE:
@@ -191,34 +202,33 @@ class Overlay:
         self.message_queue.put(("append",text))
 
 
-
-
     def _process_queue(self) -> None:
+        updated = False
         while not self.message_queue.empty():
             action, payload = self.message_queue.get_nowait()
             if action == "replace":
                 self.current_text = payload
             elif action == "append":
                 self.current_text += payload
-            self.message_label.config(text=self.current_text)
+            updated = True
+        if updated:
+            self.message_label.config(text=self.current_text,wraplength=self.window_width - 40,)
+            height = self._calculate_window_height()
+            self._position_window(self.window_width,height,)
             self.set_state(OverlayState.EXPANDED)
             self._restart_stale_timer()
         if self.running:
-                self.root.after(50,self._process_queue)
-
-
-
+            self.root.after(50,self._process_queue,)
 
     def _restart_stale_timer(self) -> None:
         if self._fade_after_id is not None:
-            self.root.after_cancel(self._fade_after_id )
+            self.root.after_cancel(self._fade_after_id)
             self._fade_after_id = None
         self.platform_window.reset_opacity()
         if self._stale_after_id is not None:
             self.root.after_cancel(self._stale_after_id)
-        self._stale_after_id = self.root.after(
-            int(self.stale_seconds * 1000),
-            self._begin_fade)
+        display_time = self._calculate_display_time()
+        self._stale_after_id = self.root.after(int(display_time * 1000),self._begin_fade,)
 
 
     def _begin_fade(self) -> None:
@@ -231,15 +241,14 @@ class Overlay:
 
     def _fade(self) -> None:
         """
-        Fade the overlay out smoothly.
+        Fade smoothly.
         """
-        opacity = 1.0 - (self._fade_step / self.fade_steps)
-        if opacity < 0:
-            opacity = 0
-        self.platform_window.reset_opacity()
+        opacity = (1.0 - (self._fade_step / self.fade_steps))
+        opacity = max(0.0,opacity,)
+        self.platform_window.set_opacity( opacity)
         self._fade_step += 1
         if self._fade_step <= self.fade_steps:
-            self._fade_after_id = self.root.after(self.fade_interval_ms,self._fade)
+            self._fade_after_id = self.root.after(self.fade_interval_ms,self._fade,)
         else:
             self.platform_window.reset_opacity()
             self.set_state(OverlayState.READY)
