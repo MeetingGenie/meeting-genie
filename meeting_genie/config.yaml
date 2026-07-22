@@ -3,7 +3,7 @@
 
 audio:
   sample_rate: 16000          # what whisper wants; sources resample to this
-  vad_frame_ms: 30            # 20-30ms frames, NOT 1-second chunks
+  vad_frame_ms: 60            # bumped from 30 - fewer audio callbacks/sec to reduce input overflow
   calibrate_seconds: 2.0      # measure noise floor at startup
   noise_floor_multiplier: 3.0 # silence threshold = measured floor * this (never hardcode 0.012 again)
 
@@ -12,6 +12,14 @@ transcribe:
   compute_type: "int8"
   # initial_prompt is built from glossary.terms below + these extras:
   prompt_extras: "This is a work meeting transcript."
+  cpu_threads: 4              # bumped from 2 (fixed overflow but was slow). STILL A GUESS - tune against real core count.
+  # Separate thresholds - loopback is a clean digital signal, mic picks up
+  # real room noise/hum/distance. One shared number was wrong for the mic
+  # and caused Whisper to hallucinate the initial_prompt back as "speech"
+  # on pure noise. TUNE both against real recordings on the demo machine.
+  mic_silence_rms: 300
+  loopback_silence_rms: 150
+  segment_silence_ms: 600     # how long someone must pause before we cut the utterance
 
 glossary:
   fuzzy_threshold: 0.85       # auto-replace above this similarity
@@ -29,7 +37,7 @@ correction:
 
 trigger:
   threshold: 3.0
-  silence_ms: 1200            # the struggle signal
+  silence_ms: 2000            # the struggle signal
   min_words: 3
   max_words: 40
   signals:
@@ -43,20 +51,19 @@ trigger:
     first_person_intent: -2.0         # "should I share my screen"
     user_already_answering: -5.0      # me track went hot -> kill
 
-brain:
-  model: "llama3.1:8b"
-  ollama_url: "http://localhost:11434/api/chat"
-  num_predict: 80             # popup answers are 2-3 sentences; generation time is linear in length
-  stream: true
-  prewarm_on_start: true
-  system_prompt: >
-    You suggest short spoken answers during a live meeting. The transcript comes from
-    imperfect speech recognition: proper nouns may be garbled, infer intent from context.
-    Answer in 2-3 sentences the user could say out loud. No preamble, no markdown.
-
 summarize:
   interval_seconds: 180       # open question for Meesha: 2 min or 5?
   max_bullets: 8
+  model: "llama3.1:8b"
+  ollama_url: "http://localhost:11434/api/chat"
+  num_predict: 300
+  system_prompt: >
+    You maintain a running bullet-point summary of a live meeting. You'll get
+    the previous summary (may be empty, if this is the first update) and the
+    new raw conversation since then. Merge them into an updated summary of at
+    most {max_bullets} bullets, covering the whole meeting so far, most
+    important points first. Reply with ONLY a JSON object of this exact shape,
+    nothing else: {{"bullets": ["point one", "point two", ...]}}
 
 overlay:
   hotkey: "ctrl+shift+space"  # open question: check for Teams/Meet collisions
@@ -67,31 +74,22 @@ mode:
   headphones: true            # false enables echo dedup + correlation gating (post-MVP)
 
 output:
+
   meetings_dir: "meetings"
 
 brain:
-
   host: "http://127.0.0.1:11434"
-
   model: llama3.2:latest
-
   temperature: 0.2
-
   top_p: 0.9
-
   num_predict: 180
-
   timeout: 120
-
   prewarm_prompt: "Reply only with OK."
-
   system_prompt: |
-    You are MeetingGenie.
-
-    Help the user answer questions during meetings.
-
-    Answer briefly.
-
+   You suggest short spoken answers during a live meeting. The transcript comes from
+    imperfect speech recognition: proper nouns may be garbled, infer intent from context.
+    Answer in sentences the user could say out loud. No preamble, no markdown.
 logging:
 
   suggestions_file: "meetings/suggestions.json"
+  meetings_dir: "meetings"
