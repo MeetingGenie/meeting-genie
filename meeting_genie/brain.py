@@ -228,7 +228,6 @@ class Brain:
         """
 
         try:
-
             requests.post(
                 f"{self.base_url}/api/generate",
                 json={
@@ -283,7 +282,7 @@ RECENT CONVERSATION
 {transcript.strip()}
 
 ==============================
-QUESTION(S)
+CURRENT QUESTION
 ==============================
 
 {question_block}
@@ -292,15 +291,18 @@ QUESTION(S)
 INSTRUCTIONS
 ==============================
 
-Answer only what is necessary.
+Answer the question naturally as if helping someone during a meeting.
 
-Be concise.
+Use the meeting summary first.
+Use the recent conversation for context.
+If the transcript contains transcription mistakes, infer the intended meaning from the surrounding context instead of repeating incorrect words.
 
-Avoid unnecessary explanation.
+Give enough detail to fully answer the question.
+Explain your reasoning briefly when useful.
 
-Prefer bullet points when useful.
+Use bullet points only when they improve readability.
 
-Maximum {self.num_predict} tokens.
+Keep the response under {self.num_predict} tokens.
 """
 
         return prompt
@@ -308,120 +310,101 @@ Maximum {self.num_predict} tokens.
     ##################################################################
 
     def _generate_stream(
-        self,
-        generation: int,
-        prompt: str,
-    ) -> Optional[str]:
+    self,
+    generation: int,
+    prompt: str,
+) -> Optional[str]:
         """
-        Stream Ollama output.
+        Stream Ollama output to the overlay.
 
-        Returns None if cancelled.
-
-        Otherwise returns the final answer.
+        Returns:
+            None if cancelled or failed.
+            Full response string otherwise.
         """
 
         body = {
-
             "model": self.model,
-
             "prompt": prompt,
-
             "stream": True,
-
             "options": {
-
                 "temperature": self.temperature,
-
                 "top_p": self.top_p,
-
                 "num_predict": self.num_predict,
-
             },
         }
+
+        print("\nSending prompt to Ollama...")
+        print(f"Prompt length: {len(prompt)} characters")
 
         full_response = []
 
         try:
-
             response = requests.post(
-
                 f"{self.base_url}/api/generate",
-
                 json=body,
-
                 stream=True,
-
-                timeout=self.timeout,
-
+                timeout=(10, None),      # <-- IMPORTANT CHANGE
             )
 
             response.raise_for_status()
 
-            #
-            # Replace "Thinking..."
-            #
+            print("HTTP Connected.\nStreaming...\n")
 
+            # Clear the "Thinking..." message
             self.overlay.show_message("")
 
-            for line in response.iter_lines():
-
-                #
-                # New generation submitted?
-                #
-                # Stop immediately.
-                #
-
-                with self.generation_lock:
-
-                    if generation != self.generation_id:
-
-                        response.close()
-
-                        return None
+            for line in response.iter_lines(decode_unicode=True):
 
                 if not line:
                     continue
 
-                packet = json.loads(
-                    line.decode("utf-8")
-                )
+                # Cancel if a newer generation arrived
+                with self.generation_lock:
+                    if generation != self.generation_id:
+                        response.close()
+                        return None
 
-                token = packet.get(
-                    "response",
-                    ""
-                )
+                packet = json.loads(line)
+
+                token = packet.get("response", "")
 
                 if token:
-
                     full_response.append(token)
 
-                    #
-                    # Stream directly to overlay.
-                    #
-
+                    # Stream token to overlay
                     self.overlay.append_text(token)
+
+                    # Also print live to terminal
+                    print(token, end="", flush=True)
 
                 if packet.get("done", False):
                     break
 
+            print("\n\n========== FINISHED ==========\n")
+
             return "".join(full_response)
 
-        except requests.RequestException:
+        except requests.RequestException as e:
+            import traceback
+
+            traceback.print_exc()
 
             self.overlay.show_message(
-                "Unable to contact Ollama."
+                f"Unable to contact Ollama:\n{e}"
             )
 
             return None
 
-        except Exception as exc:
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
 
             self.overlay.show_message(
-                f"Generation error:\n{exc}"
+                f"Generation error:\n{e}"
             )
 
             return None
-
     ##################################################################
     # Logging
     ##################################################################

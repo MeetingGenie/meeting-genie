@@ -69,53 +69,38 @@ def submit_fake_question(brain: Brain):
     time.sleep(2)
 
     summary = """
-The team is discussing Greek mythology for an educational podcast.
-
-Earlier in the meeting they covered:
-- The twelve Olympian gods.
-- The Titan war (Titanomachy).
-- Zeus becoming king of Olympus.
-- The relationships between major gods.
-- Why myths changed between different Greek city-states.
-
-The group agreed that the podcast should explain myths in a beginner-friendly way without assuming prior knowledge.
+The speakers have been discussing the history of space exploration, beginning with how public perception of the Space Race often focuses on the Moon landing while overlooking the decades of scientific and engineering progress that made it possible. They agree that Apollo 11 was an extraordinary achievement, but one speaker argues that the earlier Mercury and Gemini programs deserve far more recognition because they solved fundamental problems like orbital rendezvous, long-duration spaceflight, and astronaut safety. The other speaker agrees, adding that breakthroughs are usually remembered while the incremental work that enables them fades into the background.
+The conversation shifts toward the motivations behind the Space Race. Rather than viewing it purely as scientific curiosity, they discuss how competition between the United States and the Soviet Union accelerated technological development. One speaker points out that geopolitical rivalry produced enormous funding that would have been difficult to justify otherwise. They compare this to modern AI development, suggesting that competition often speeds innovation, although it can also encourage unnecessary secrecy and duplicated effort.
+From there, they discuss whether human spaceflight provides enough value compared to robotic missions. One speaker initially argues that robotic probes are far more cost-effective because they can operate for years without risking human lives. The other agrees from a scientific perspective but believes crewed missions inspire the public in a way robots rarely do. They compare images from the Voyager missions, the Mars rovers, and the Apollo program, concluding that people emotionally connect with astronauts because they can imagine themselves standing in those environments.
+The speakers spend some time discussing the Voyager missions. They are fascinated that both spacecraft continue sending useful scientific data decades after launch despite being built with computing power far below modern smartphones. One speaker jokes that engineering teams in the 1970s somehow built hardware that outlived several generations of computers. This leads to a conversation about designing systems for reliability instead of maximum performance, with both agreeing that modern consumer technology often prioritizes rapid iteration over longevity.
+The discussion then moves to Mars exploration. One speaker believes humans will eventually establish a permanent settlement, though probably much later than optimistic predictions suggest. The other is more skeptical, arguing that the engineering challenges—radiation exposure, reduced gravity, psychological isolation, and the enormous cost of transporting supplies—remain underestimated by the public. They agree that sending people to Mars is significantly harder than landing on the Moon because rescue missions would be practically impossible during much of the journey.
+They briefly compare NASA with newer private companies entering the space industry. One speaker appreciates how reusable rockets have dramatically reduced launch costs, making ambitious missions more economically realistic. However, they also note that government agencies still perform a unique role by funding long-term scientific missions that may never become commercially profitable. They conclude that public and private organizations will probably continue depending on one another rather than replacing each other.
+Later, the conversation turns philosophical. They debate whether humanity should prioritize solving problems on Earth before investing heavily in space exploration. One speaker rejects the idea that these goals are mutually exclusive, arguing that scientific research often creates technologies that eventually benefit everyday life. Examples like satellite navigation, weather forecasting, advanced materials, and medical imaging are mentioned. The other agrees but adds that advocates sometimes exaggerate these benefits, making it important to justify exploration honestly rather than promising unrealistic economic returns.
+Before the recent transcript begins, the speakers begin talking about future deep-space missions. They compare sending astronauts to Mars with robotic exploration of Europa, Titan, and Enceladus. One speaker becomes particularly interested in the search for extraterrestrial life, arguing that discovering even simple microbial organisms elsewhere in the Solar System would fundamentally change humanity's understanding of biology and its place in the universe. The discussion naturally leads into how scientists decide which worlds are currently considered the most promising places to search for life.
 """
 
     transcript = """
-Them:
-Earlier we explained how Zeus defeated the Titans and became ruler of Olympus.
-
-Me:
-Yeah... and uh... Croutons... he was like... eating... uh... soup? Because of... prophecy thing...
-
-Them:
-Right. Cronus swallowed his children because he feared one of them would overthrow him, just as he had overthrown his own father.
-
-Me:
-Yeah that's... um... then Zeus got hidden somewhere... island maybe? Then... goat milk... I don't remember.
-
-Them:
-Exactly. Zeus was hidden on Crete and later returned to challenge Cronus.
-
-Me:
-Thank you for watching our video
-
-Them:
-Athena was born from Zeus's head after Hephaestus split it open.
-
-Me:
-Yeah, that's the one.
-
-Them:
-Now here's something I want to clarify for the audience.
-
-How is Greek mythology different from Roman mythology? Are the gods actually different, or are they mostly the same with different names?
-"""
+    THEM: Actually... wait, I always hear people talk about Mars first, but Europa sounds just as exciting to me.
+    ME: yeah... ice... ocean... under maybe
+    THEM: Right. If there's a liquid ocean underneath all that ice, that's incredibly interesting.
+    ME: mm... life maybe... tiny things
+    THEM: Exactly. Even microbes would completely change biology.
+    ME: yeah... not alone... maybe
+    THEM: Although Enceladus is fascinating too because we already know material is being blasted into space through those geysers.
+    ME: easier... sample... maybe don't dig
+    THEM: That's the clever part. You could potentially fly through the plume instead of drilling kilometers through ice.
+    ME: yeah... less... impossible
+    THEM: Titan is another weird one though. Lakes, rivers... just made of methane instead of water.
+    ME: crazy... different country
+    THEM: Which makes me wonder whether we're being too Earth-centric when we define what life even is.
+    ME: maybe... meeting geenie... i dont know
+    THEM: Exactly. We always assume liquid water because that's what works here.
+    ME: yeah... baywatch
+    THEM: So if scientists had to rank the most promising places in our Solar System to search for extraterrestrial life today, what would that list actually look like?
+    """
 
     questions = [
-        "How is Greek mythology different from Roman mythology? Are the gods actually different, or are they mostly the same with different names?"
-    ]
-
+        "What locations in our Solar System do scientists currently consider the most promising places to search for extraterrestrial life, and why?"]
     brain.submit(
         questions=questions,
         recent_transcript=transcript,

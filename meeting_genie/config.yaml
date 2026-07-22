@@ -73,13 +73,13 @@ brain:
 
   host: "http://127.0.0.1:11434"
 
-  model: "llama3.1:8b"
+  model: llama3.2:latest
 
   temperature: 0.2
 
   top_p: 0.9
 
-  num_predict: 96
+  num_predict: 180
 
   timeout: 120
 
