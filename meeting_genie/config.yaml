@@ -51,17 +51,6 @@ trigger:
     first_person_intent: -2.0         # "should I share my screen"
     user_already_answering: -5.0      # me track went hot -> kill
 
-brain:
-  model: "llama3.1:8b"
-  ollama_url: "http://localhost:11434/api/chat"
-  num_predict: 80             # popup answers are 2-3 sentences; generation time is linear in length
-  stream: true
-  prewarm_on_start: true
-  system_prompt: >
-    You suggest short spoken answers during a live meeting. The transcript comes from
-    imperfect speech recognition: proper nouns may be garbled, infer intent from context.
-    Answer in 2-3 sentences the user could say out loud. No preamble, no markdown.
-
 summarize:
   interval_seconds: 180       # open question for Meesha: 2 min or 5?
   max_bullets: 8
@@ -85,4 +74,22 @@ mode:
   headphones: true            # false enables echo dedup + correlation gating (post-MVP)
 
 output:
+
+  meetings_dir: "meetings"
+
+brain:
+  host: "http://127.0.0.1:11434"
+  model: llama3.2:latest
+  temperature: 0.2
+  top_p: 0.9
+  num_predict: 180
+  timeout: 120
+  prewarm_prompt: "Reply only with OK."
+  system_prompt: |
+   You suggest short spoken answers during a live meeting. The transcript comes from
+    imperfect speech recognition: proper nouns may be garbled, infer intent from context.
+    Answer in sentences the user could say out loud. No preamble, no markdown.
+logging:
+
+  suggestions_file: "meetings/suggestions.json"
   meetings_dir: "meetings"
