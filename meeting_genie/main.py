@@ -69,7 +69,7 @@ class MeetingGenie:
         self.overlay = Overlay()
         self.brain = Brain(self.cfg, self.overlay)
         self.summarizer = Summarizer(self.cfg, on_summary_updated=self._write_summary)
-        self.trigger = Trigger(self.cfg)
+        self.trigger = Trigger(self.cfg, on_trigger=self._ask_brain,)
         self.recorder = AudioRecorder()
 
     # ------------------------------------------------------------------
@@ -100,14 +100,12 @@ class MeetingGenie:
         with self.recent_lock:
             self.recent.append(line)
         self._append_transcript(utterance)
-
-        # Summarizer just buffers; its own timer thread does the LLM call.
+        # Feed summarizer
         self.summarizer.feed(utterance)
-
-        # Trigger returns a list of question strings when it decides to fire.
-        questions = self.trigger.feed(utterance)
-        if questions:
-            self._ask_brain(questions)
+        # Feed trigger.
+        # Trigger owns its own timer thread and will call
+        # self._ask_brain() after enough silence.
+        self.trigger.feed(utterance)
 
     def _append_transcript(self, utterance) -> None:
         try:
@@ -125,6 +123,7 @@ class MeetingGenie:
             pass  # transcript logging must never break the pipeline
 
     def _ask_brain(self, questions: list[str]) -> None:
+        print("[Main] Asking brain:", questions)
         self.brain.submit(
             questions=questions,
             recent_transcript=self._recent_transcript_text(),
@@ -157,9 +156,9 @@ class MeetingGenie:
 
     def run(self) -> None:
         print(f"MeetingGenie starting. Meeting folder: {self.meeting_dir}")
-
         self.brain.start()        # its own worker thread + prewarm
-        self.summarizer.start()   # its own timer thread
+        self.summarizer.start() 
+        self.trigger.start()    # its own timer thread
         self.recorder.start()     # audio callbacks on their own threads
 
         transcribe_thread = threading.Thread(

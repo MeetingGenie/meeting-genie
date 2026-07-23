@@ -87,7 +87,7 @@ brain:
   prewarm_prompt: "Reply only with OK."
   system_prompt: |
    You suggest short spoken answers during a live meeting. The transcript comes from
-    imperfect speech recognition: proper nouns may be garbled, infer intent from context.
+    imperfect speech recognition: proper nouns may be garbled, infer intent from context. Do not summarize the conversation till then for the user.
     Answer in sentences the user could say out loud. No preamble, no markdown.
 logging:
 

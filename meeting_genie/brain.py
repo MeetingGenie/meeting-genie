@@ -140,6 +140,7 @@ class Brain:
         recent_transcript: str,
         summary: str,
     ):
+        print("[Brain] Submit:", questions)
         """
         Schedule a new generation.
 
@@ -251,63 +252,26 @@ class Brain:
 
     ##################################################################
 
-    def _build_prompt(
-        self,
-        summary: str,
-        transcript: str,
-        questions: list[str],
-    ) -> str:
-        """
-        Build one prompt for Ollama.
-
-        Keep formatting deterministic.
-        """
-
-        question_block = "\n".join(
-            f"- {q}" for q in questions
-        )
-
+    def _build_prompt(self,summary: str,transcript: str,questions: list[str],) -> str:
+        question_block = "\n".join(f"- {q}" for q in questions)
         prompt = f"""{self.system_prompt}
-
-==============================
-MEETING SUMMARY
-==============================
-
-{summary.strip()}
-
-==============================
-RECENT CONVERSATION
-==============================
-
-{transcript.strip()}
-
-==============================
-CURRENT QUESTION
-==============================
-
-{question_block}
-
-==============================
-INSTRUCTIONS
-==============================
-
-Answer the question naturally as if helping someone during a meeting.
-
-Use the meeting summary first.
-Use the recent conversation for context.
-If the transcript contains transcription mistakes, infer the intended meaning from the surrounding context instead of repeating incorrect words.
-
-Give enough detail to fully answer the question.
-Explain your reasoning briefly when useful.
-
-Use bullet points only when they improve readability.
-
-Keep the response under {self.num_predict} tokens.
-"""
-
+        ## Meeting Summary
+        {summary.strip()}
+        ## Recent Conversation
+        {transcript.strip()}
+        ## Question To Answer
+        {question_block}
+        ## Instructions
+        You are answering someone's question during a meeting.
+        Output ONLY the answer.
+        Do not explain the meeting.
+        Do not mention the transcript.
+        Do not mention the summary.
+        Do not say the summary is empty.
+        Begin immediately with the answer.
+        Keep the response under {self.num_predict} tokens.
+        """
         return prompt
-
-    ##################################################################
 
     def _generate_stream(
     self,
@@ -352,6 +316,7 @@ Keep the response under {self.num_predict} tokens.
 
             # Clear the "Thinking..." message
             self.overlay.show_message("")
+            self.overlay.expand()
 
             for line in response.iter_lines(decode_unicode=True):
 
