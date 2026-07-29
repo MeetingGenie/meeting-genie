@@ -196,9 +196,9 @@ def prewarm(cfg):
     """Load the model and run one tiny inference, so the first REAL utterance
     doesn't eat the cold-start cost. Call this at startup. brain.py already
     does the equivalent for Ollama."""
+    t0 = time.perf_counter()
     model = _get_model(cfg)
     silence = np.zeros(16000, dtype=np.float32)
-    t0 = time.perf_counter()
     try:
         model.recognize(silence, sample_rate=16000)
     except Exception as exc:
