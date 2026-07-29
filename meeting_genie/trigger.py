@@ -2,6 +2,17 @@
 MeetingGenie - trigger.py
 
 Determines when the assistant should answer.
+
+Two mechanisms, deliberately separate (see HANDOFF.md):
+  1. score_sentence() - is this text a question?
+  2. a background timer thread - has the user actually been silent since?
+
+FIXED IN THIS VERSION (HANDOFF.md bug #7, "additive silence delay"):
+The silence clock used to start when an Utterance ARRIVED, which is only
+after STT finished transcribing it. So a 2000ms silence window really meant
+600ms (segment cut) + STT time + 2000ms of real-world silence before firing.
+It now measures against utterance.audio_end_ts - the moment the speech
+actually stopped - so 2000ms means 2000ms.
 """
 
 from __future__ import annotations
@@ -59,6 +70,22 @@ def score_sentence(sentence: str, cfg: dict) -> float:
     return score
 
 
+def speech_end_time(utterance, now: float) -> float:
+    """When did this utterance's speech actually stop, on the monotonic clock?
+
+    Prefers utterance.audio_end_ts (set by transcribe.py's Segmenter from the
+    last loud audio chunk). Falls back to arrival time when it's missing or
+    zero, which is the case for tools/fake_queue.py and any older producer.
+
+    Clamped to `now`: an audio timestamp in the future would mean a clock
+    mismatch between tracks, and we'd rather under-fire than fire instantly.
+    """
+    ts = getattr(utterance, "audio_end_ts", 0.0) or 0.0
+    if ts <= 0.0:
+        return now
+    return min(ts, now)
+
+
 class Trigger:
 
     def __init__(
@@ -72,7 +99,16 @@ class Trigger:
         self.pending_questions: list[str] = []
 
         self.pending_since: Optional[float] = None
-        self.last_utterance_time = time.monotonic()
+
+        # Monotonic time that speech last STOPPED on either track.
+        # Was last_utterance_time (arrival time) before the bug #7 fix.
+        #
+        # Starts as None, NOT time.monotonic(). Seeding it with construction
+        # time breaks the max() below: the first real utterance's audio ended
+        # BEFORE we were constructed-plus-STT-time, so max() would throw the
+        # true audio timestamp away and we'd silently be back to timing from
+        # arrival. Caught by the "STT took 1.5s" test.
+        self.last_speech_end: Optional[float] = None
 
         self.lock = threading.Lock()
 
@@ -95,10 +131,19 @@ class Trigger:
     def feed(self, utterance):
 
         now = time.monotonic()
+        ended = speech_end_time(utterance, now)
 
         with self.lock:
 
-            self.last_utterance_time = now
+            # max(), not assignment: utterances from the two tracks can be
+            # delivered out of order relative to their audio clocks (one
+            # source's STT call may finish after a later one from the other).
+            # Silence is measured from the MOST RECENT speech on either track,
+            # so an out-of-order older utterance must not rewind the clock.
+            if self.last_speech_end is None:
+                self.last_speech_end = ended
+            else:
+                self.last_speech_end = max(self.last_speech_end, ended)
 
             if utterance.speaker == "them":
 
@@ -119,7 +164,7 @@ class Trigger:
                         )
 
                     # restart silence timer
-                    self.pending_since = now
+                    self.pending_since = ended
 
             elif utterance.speaker == "me":
 
@@ -137,28 +182,37 @@ class Trigger:
             time.sleep(0.1)
 
             fire = None
+            silence_at_fire = 0.0
 
             with self.lock:
 
-                if not self.pending_questions:
+                if not self.pending_questions or self.last_speech_end is None:
                     continue
 
                 silence = (
                     time.monotonic()
-                    - self.last_utterance_time
+                    - self.last_speech_end
                 )
 
                 if silence >= silence_seconds:
 
                     # Only answer the LAST detected question.
                     fire = [self.pending_questions[-1]]
+                    silence_at_fire = silence
 
                     self._clear_pending()
 
             if fire:
 
                 try:
-                    print("[Trigger] Fired:", fire)
+                    # Instrumentation: real silence at fire time should now sit
+                    # just above trigger.silence_ms. If it's consistently much
+                    # larger, STT is still the bottleneck and the model swap
+                    # needs revisiting - not the trigger.
+                    print(
+                        f"[Trigger] Fired after {silence_at_fire * 1000:.0f}ms "
+                        f"real silence (target {silence_seconds * 1000:.0f}ms): {fire}"
+                    )
                     self.on_trigger(fire)
 
                 except Exception:
