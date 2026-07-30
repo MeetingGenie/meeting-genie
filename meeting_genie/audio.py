@@ -267,10 +267,15 @@ class AudioRecorder:
         self.start_mic()
         self.start_loopback()
 
-        self._writer_thread = threading.Thread(target=self._write_loop, daemon=True)
-        self._writer_thread.start()
+        # Only start the writer thread if we're actually saving audio.
+        if any(handle is not None for handle in self._wav_handles.values()):
+            self._writer_thread = threading.Thread(
+                target=self._write_loop,
+                daemon=True,
+            )
+            self._writer_thread.start()
+
         self._running = True
-        logger.info("Audio capture service started")
 
     def stop(self) -> None:
         """Stop capture streams, flush pending audio, and close files."""
@@ -344,13 +349,15 @@ class AudioRecorder:
         samplerate = int(self._mic_device.get("default_samplerate", self.config.sample_rate_output))
         blocksize = self._chunk_size_for_rate(samplerate)
         logger.info("Starting microphone stream at %s Hz with block size %s", samplerate, blocksize)
-
+        print(f"Mic sample rate: {samplerate}")
+        print(f"Mic channels: {self._mic_channels}")
         self._mic_stream = sd.InputStream(
             device=int(self._mic_device.get("index", -1)),
             channels=self._mic_channels,
             samplerate=samplerate,
             blocksize=blocksize,
             dtype="int16",
+            latency= 'high',
             callback=self._mic_callback_impl,
         )
         self._mic_stream.start()
