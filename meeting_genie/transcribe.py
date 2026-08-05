@@ -28,8 +28,13 @@ import numpy as np
 from scipy.signal import resample_poly
 
 
-def bytes_to_samples(audio_bytes):
-    return np.frombuffer(audio_bytes, dtype=np.int16)
+def bytes_to_samples(audio_bytes, channels=1):
+    samples = np.frombuffer(audio_bytes, dtype=np.int16)
+    # Convert stereo -> mono
+    if channels > 1:
+        samples = samples.reshape(-1, channels)
+        samples = samples.mean(axis=1)
+    return samples
 
 
 def resample_to_16k(samples, original_rate):
@@ -55,8 +60,22 @@ class FakeChunk:
 
 
 def prepare_chunk(chunk):
-    samples = bytes_to_samples(chunk.audio)
-    return resample_to_16k(samples, chunk.sample_rate)
+    samples = bytes_to_samples(
+        chunk.audio,
+        chunk.channels,
+    )
+    samples = resample_to_16k(samples, chunk.sample_rate)
+    # Remove DC offset which can confuse the model and VAD.
+    if samples.size:
+        samples = samples - float(np.mean(samples))
+        # Gentle normalization: boost very low-energy signals slightly so the
+        # ASR model has a better chance, but avoid strong amplification of
+        # background noise. Use conservative thresholds.
+        energy = rms(samples)
+        if energy > 0 and energy < 400.0:
+            gain = min(2.0, 400.0 / (energy + 1e-6))
+            samples = samples * gain
+    return samples
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +119,7 @@ class Segmenter:
         # produces garbage or an error instead of text.
         self.max_utterance_s = float(t.get("max_utterance_s", 20))
         self.chunk_ms = cfg["audio"]["vad_frame_ms"]
+        self.last_feed_was_speech = False
         self._buffer = []           # list of numpy arrays, current utterance
         self._buffered_samples = 0  # running count, so we don't re-sum every chunk
         self._silence_ms = 0        # how long we've been quiet since last speech
@@ -111,6 +131,7 @@ class Segmenter:
         Returns (audio, start_ts, audio_end_ts, silence_after_ms) when an
         utterance is ready, else None."""
         loud = rms(samples) >= self.silence_rms
+        self.last_feed_was_speech = loud
 
         if loud:
             if self._start_ts is None:
@@ -128,6 +149,11 @@ class Segmenter:
         if not self._buffer:
             return None  # silence before any speech started
 
+        # Keep quiet frames within an active sentence. Discarding each
+        # below-threshold frame chops low-volume words and natural pauses out
+        # of the waveform before Parakeet receives it.
+        self._buffer.append(samples)
+        self._buffered_samples += len(samples)
         self._silence_ms += self.chunk_ms
         if self._silence_ms < self.segment_silence_ms:
             return None  # not quiet long enough yet
@@ -154,6 +180,60 @@ class Segmenter:
 # ---------------------------------------------------------------------------
 
 _asr_model = None
+
+# Debug dumping controls
+_debug_dumped = 0
+
+def _maybe_dump_mic_debug(pre_samples, post_samples, text, confidence, cfg):
+    """Write example pre/post mic WAVs and a small JSON metadata file when
+    debug.dump_mic_examples is enabled in config. Limits to debug.dump_count
+    files to avoid filling disk."""
+    global _debug_dumped
+    dbg_cfg = cfg.get("debug", {}) if isinstance(cfg, dict) else {}
+    if not dbg_cfg.get("dump_mic_examples", False):
+        return
+    max_count = int(dbg_cfg.get("dump_count", 8))
+    if _debug_dumped >= max_count:
+        return
+    try:
+        from pathlib import Path
+        import wave
+        import json
+
+        out_dir = Path(cfg.get("output", {}).get("meetings_dir", "meetings")) / "debug_mic_examples"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        idx = _debug_dumped + 1
+        pre_path = out_dir / f"mic_{idx:02d}_pre.wav"
+        post_path = out_dir / f"mic_{idx:02d}_post.wav"
+        meta_path = out_dir / f"mic_{idx:02d}.json"
+
+        # samples expected as numpy arrays at 16k, float-like in int16 range
+        def write_wav(path, samples):
+            arr = np.asarray(samples)
+            # clip to int16 range
+            arr_i16 = np.clip(arr, -32768, 32767).astype(np.int16)
+            with wave.open(str(path), "wb") as h:
+                h.setnchannels(1)
+                h.setsampwidth(2)
+                h.setframerate(16000)
+                h.writeframes(arr_i16.tobytes())
+
+        write_wav(pre_path, pre_samples)
+        write_wav(post_path, post_samples)
+
+        meta = {
+            "text": text,
+            "confidence": confidence,
+            "pre_path": str(pre_path),
+            "post_path": str(post_path),
+        }
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+        _debug_dumped += 1
+        print(f"[debug] dumped mic examples: {pre_path} {post_path}")
+    except Exception:
+        pass
 
 
 def _get_model(cfg):
@@ -290,7 +370,61 @@ def process_segment(source, audio_16k, start_ts, audio_end_ts, silence_after_ms,
     """One finished utterance's audio -> (Utterance, stt_ms).
     Utterance is None if the model heard nothing (silence misdetected as
     speech, etc) - stt_ms is still returned so we can measure those too."""
+    # audio_16k: int16-range floats at 16kHz. Apply per-utterance cleaning
+    # before calling the ASR model. This helps with mic recordings that have
+    # rumble, DC offset, or low RMS compared to loopback.
+    try:
+        # Keep a copy of pre-cleaned samples for debug dumping
+        pre_samples = np.asarray(audio_16k, dtype=np.float64).copy()
+        samples = pre_samples.copy()
+        # Remove any remaining DC offset
+        if samples.size:
+            samples = samples - float(np.mean(samples))
+
+        # For mic source, apply a light high-pass filter to remove rumble
+        # and a per-utterance RMS normalization to improve ASR clarity.
+        if source == "mic":
+            try:
+                from scipy.signal import butter, filtfilt
+
+                sr = 16000
+                cutoff = float(cfg.get("transcribe", {}).get("highpass_hz", 80.0))
+                b, a = butter(1, float(cutoff) / (sr / 2.0), btype="high", analog=False)
+                # filtfilt wants float64
+                samples = filtfilt(b, a, samples)
+            except Exception:
+                # best-effort: if filtering fails, continue without it
+                pass
+
+            # RMS-target normalization (int16-scale). Use conservative target
+            # and gain cap to avoid turning background noise into speech-like
+            # input that the ASR model will hallucinate.
+            target_rms = float(cfg.get("transcribe", {}).get("target_rms", 3000.0))
+            cur_rms = float(rms(samples)) if samples.size else 0.0
+            if cur_rms > 0 and cur_rms < target_rms:
+                gain = min(3.0, target_rms / (cur_rms + 1e-6))
+                samples = samples * gain
+
+        # Convert back to int16-range floats for the recognizer path.
+        audio_16k = samples
+        # Debug dump pre/post mic audio when requested and when source is mic
+        if source == "mic":
+            try:
+                _maybe_dump_mic_debug(pre_samples, samples, None, None, cfg)
+            except Exception:
+                pass
+    except Exception:
+        # Cleaning must not break the pipeline - fall back to raw audio
+        pass
+
     text, confidence, stt_ms = transcribe_audio(audio_16k, cfg)
+    # If debug dumping is enabled, write the pre/post audio along with the
+    # resulting transcript and confidence for offline inspection.
+    if source == "mic":
+        try:
+            _maybe_dump_mic_debug(pre_samples, audio_16k, text, confidence, cfg)
+        except Exception:
+            pass
     if not text:
         return None, stt_ms
     u = make_utterance(source, text, confidence, start_ts, audio_end_ts, silence_after_ms)
@@ -333,7 +467,7 @@ def _stt_worker(work_queue, cfg, on_utterance):
             on_utterance(u)
 
 
-def run_transcription_loop(recorder, cfg, on_utterance):
+def run_transcription_loop(recorder, cfg, on_utterance, on_audio_activity=None):
     """recorder: a running audio.AudioRecorder. on_utterance: callback that
     takes one Utterance, called whenever mic or loopback produces a finished
     sentence. Runs forever until recorder.stop() is called elsewhere.
@@ -346,8 +480,30 @@ def run_transcription_loop(recorder, cfg, on_utterance):
     import queue
     import threading
 
-    mic_seg = Segmenter(cfg, "mic")
-    loop_seg = Segmenter(cfg, "loopback")
+    # If the recorder performed a mic calibration, use it to set a safer
+    # mic silence threshold so VAD doesn't feed noisy room hum into STT.
+    import copy
+
+    cfg_local = copy.deepcopy(cfg)
+    try:
+        calibrated = None
+        if hasattr(recorder, "get_calibrated_mic_rms"):
+            calibrated = recorder.get_calibrated_mic_rms()
+        if calibrated is not None:
+            multiplier = float(cfg_local.get("audio", {}).get("noise_floor_multiplier", 3.0))
+            existing = int(cfg_local.get("transcribe", {}).get("mic_silence_rms", 300))
+            # Clamp the suggested threshold to avoid huge jumps that make VAD
+            # either too insensitive or too sensitive. Limit the new value to
+            # at most `existing * 5` so calibration can't explode behavior.
+            suggested_raw = calibrated * multiplier
+            suggested = int(max(existing, min(suggested_raw, existing * 5)))
+            cfg_local.setdefault("transcribe", {})["mic_silence_rms"] = suggested
+            print(f"[transcribe] using calibrated mic_silence_rms={suggested} (raw {suggested_raw})")
+    except Exception:
+        pass
+
+    mic_seg = Segmenter(cfg_local, "mic")
+    loop_seg = Segmenter(cfg_local, "loopback")
     work_queue = queue.Queue()
 
     worker = threading.Thread(
@@ -364,6 +520,8 @@ def run_transcription_loop(recorder, cfg, on_utterance):
             got_something = True
             samples = prepare_chunk(mic_chunk)
             result = mic_seg.feed(samples, mic_chunk.timestamp)
+            if on_audio_activity is not None and mic_seg.last_feed_was_speech:
+                on_audio_activity("mic", mic_chunk.timestamp)
             if result is not None:
                 audio, start_ts, audio_end_ts, silence_ms = result
                 work_queue.put(
@@ -375,6 +533,8 @@ def run_transcription_loop(recorder, cfg, on_utterance):
             got_something = True
             samples = prepare_chunk(loop_chunk)
             result = loop_seg.feed(samples, loop_chunk.timestamp)
+            if on_audio_activity is not None and loop_seg.last_feed_was_speech:
+                on_audio_activity("loopback", loop_chunk.timestamp)
             if result is not None:
                 audio, start_ts, audio_end_ts, silence_ms = result
                 work_queue.put(

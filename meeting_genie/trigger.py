@@ -35,6 +35,7 @@ GREETINGS = {
     "hi", "hello", "hey",
     "okay", "ok", "so",
     "anyway",
+    "um", "uh",
 }
 
 
@@ -55,16 +56,24 @@ def score_sentence(sentence: str, cfg: dict) -> float:
 
     score = 0.0
 
-    if sentence.strip().endswith("?"):
+    # Use configured min/max word counts when applying length-based signals.
+    min_words = int(cfg.get("trigger", {}).get("min_words", 3))
+    max_words = int(cfg.get("trigger", {}).get("max_words", 40))
+
+    # Only consider a trailing question mark as a strong signal when the
+    # utterance has at least `min_words` words — short interjections like
+    # "Jane?" shouldn't force the assistant to answer.
+    if sentence.strip().endswith("?") and len(words) >= min_words:
         score += cfg["trigger"]["signals"]["ends_with_question_mark"]
 
-    if any(w.lower() in INTERROGATIVES for w in clean_words[:5]):
+    first_word = clean_words[0].strip(",.!?").lower() if clean_words else ""
+    if first_word in INTERROGATIVES:
         score += cfg["trigger"]["signals"]["starts_with_interrogative"]
 
-    elif any(w.lower() in AUXILIARIES for w in clean_words[:5]):
+    elif first_word in AUXILIARIES:
         score += cfg["trigger"]["signals"]["starts_with_auxiliary"]
 
-    if 3 <= len(words) <= 40:
+    if min_words <= len(words) <= max_words:
         score += cfg["trigger"]["signals"]["length_in_range"]
 
     return score
@@ -145,31 +154,43 @@ class Trigger:
             else:
                 self.last_speech_end = max(self.last_speech_end, ended)
 
-            if utterance.speaker == "them":
+            score = score_sentence(utterance.text, self.cfg)
 
-                score = score_sentence(
-                    utterance.text,
-                    self.cfg,
-                )
+            # Guard: ignore low-confidence microphone transcriptions to
+            # avoid false positives from noisy local mic input. The default
+            # min_confidence is conservative; callers can raise it in config.
+            min_conf = float(self.cfg.get("trigger", {}).get("min_confidence", 0.45))
+            if utterance.speaker == "me":
+                conf_val = float(getattr(utterance, "confidence", 0.0) or 0.0)
+                if conf_val < min_conf:
+                    # Treat as non-question due to low confidence
+                    score = 0.0
 
-                if score >= self.cfg["trigger"]["threshold"]:
-
-                    # Don't queue duplicates
-                    if (
-                        not self.pending_questions
-                        or self.pending_questions[-1] != utterance.text
-                    ):
-                        self.pending_questions.append(
-                            utterance.text
-                        )
-
-                    # restart silence timer
-                    self.pending_since = ended
+            # Use strict greater-than for the threshold to avoid exact-equal
+            # edge cases where a single signal equals the threshold.
+            if score > float(self.cfg["trigger"]["threshold"]):
+                # Questions can originate from the meeting audio OR from the
+                # user's microphone. The old source-specific branch made mic
+                # questions impossible to answer by clearing them here.
+                if (
+                    not self.pending_questions
+                    or self.pending_questions[-1] != utterance.text
+                ):
+                    self.pending_questions.append(utterance.text)
+                self.pending_since = ended
 
             elif utterance.speaker == "me":
-
-                # someone answered -> cancel
+                # The user started a normal statement, so they are likely
+                # answering a previous question themselves.
                 self._clear_pending()
+
+    def mark_audio_activity(self, timestamp: float) -> None:
+        """Keep the silence timer honest while either track is still talking."""
+        with self.lock:
+            if self.last_speech_end is None:
+                self.last_speech_end = timestamp
+            else:
+                self.last_speech_end = max(self.last_speech_end, timestamp)
 
     def _run_timer(self):
 

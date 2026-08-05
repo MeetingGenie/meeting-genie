@@ -107,6 +107,10 @@ class MeetingGenie:
         # self._ask_brain() after enough silence.
         self.trigger.feed(utterance)
 
+    def _on_audio_activity(self, source: str, timestamp: float) -> None:
+        """Called for live voiced frames, before an utterance is complete."""
+        self.trigger.mark_audio_activity(timestamp)
+
     def _append_transcript(self, utterance) -> None:
         try:
             import json
@@ -171,7 +175,7 @@ class MeetingGenie:
         self.recorder.start(output_paths)
         transcribe_thread = threading.Thread(
             target=run_transcription_loop,
-            args=(self.recorder, self.cfg, self._on_utterance),
+            args=(self.recorder, self.cfg, self._on_utterance, self._on_audio_activity),
             daemon=True,
             name="TranscribeLoop",
         )

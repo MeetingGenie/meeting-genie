@@ -3,7 +3,7 @@
 
 audio:
   sample_rate: 16000          # what whisper wants; sources resample to this
-  vad_frame_ms: 60            # bumped from 30 - fewer audio callbacks/sec to reduce input overflow
+  vad_frame_ms: 30            # shorter frames preserve quiet word onsets; callbacks do no I/O
   calibrate_seconds: 2.0      # measure noise floor at startup
   noise_floor_multiplier: 3.0 # silence threshold = measured floor * this (never hardcode 0.012 again)
 
@@ -59,12 +59,13 @@ correction:
 trigger:
   threshold: 3.0
   silence_ms: 2000            # the struggle signal
-  min_words: 3
+  min_words: 4
   max_words: 40
+  min_confidence: 0.6        # ignore mic utterances below this ASR confidence
   signals:
-    ends_with_question_mark: 2.0
-    starts_with_interrogative: 2.0    # what why how when where who which
-    starts_with_auxiliary: 1.5        # is/are/do/does/can/could/would + pronoun, SENTENCE START ONLY
+    ends_with_question_mark: 3.0
+    starts_with_interrogative: 3.0    # what why how when where who which
+    starts_with_auxiliary: 2.5        # plus length signal = 3.0 for a clear sentence-start question
     silence_after: 2.0
     user_filler_words: 1.0            # "um", "uh" from the me track
     length_in_range: 0.5
@@ -97,6 +98,10 @@ mode:
 output:
 
   meetings_dir: "meetings"
+
+debug:
+  dump_mic_examples: false
+  dump_count: 8
 
 brain:
   host: "http://127.0.0.1:11434"
