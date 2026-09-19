@@ -47,6 +47,8 @@ class AudioConfig:
     queue_size: int = 256
     mic_device_index: int | None = None
     loopback_device_index: int | None = None
+    calibrate_seconds: float = 0.0
+    noise_floor_multiplier: float = 3.0
 
     @classmethod
     def from_config(cls) -> "AudioConfig":
@@ -67,6 +69,8 @@ class AudioConfig:
             queue_size=int(audio_cfg.get("queue_size", 256)),
             mic_device_index=audio_cfg.get("mic_device_index"),
             loopback_device_index=audio_cfg.get("loopback_device_index"),
+            calibrate_seconds=float(audio_cfg.get("calibrate_seconds", 0.0)),
+            noise_floor_multiplier=float(audio_cfg.get("noise_floor_multiplier", 3.0)),
         )
 
 
@@ -150,14 +154,17 @@ class DeviceManager:
             self._pa = pyaudio.PyAudio()
 
         default_input, _ = sd.default.device
-        device_info = sd.query_devices(default_input)
+        input_index = self.config.mic_device_index
+        if input_index is None:
+            input_index = int(default_input)
+        device_info = sd.query_devices(input_index)
         if not isinstance(device_info, dict):
             raise RuntimeError("The default microphone device could not be resolved.")
 
         name = str(device_info.get("name", ""))
         logger.info("Selected microphone device: %s", name)
         return {
-            "index": int(default_input),
+            "index": int(input_index),
             "name": name,
             "default_samplerate": float(device_info.get("default_samplerate", self.config.sample_rate_output)),
             "max_input_channels": int(device_info.get("max_input_channels", self.config.channels)),
@@ -231,6 +238,7 @@ class AudioRecorder:
 
         self._mic_queue: queue.Queue[AudioChunk] = queue.Queue(maxsize=self.config.queue_size)
         self._loopback_queue: queue.Queue[AudioChunk] = queue.Queue(maxsize=self.config.queue_size)
+        self._writer_queue: queue.Queue[AudioChunk] = queue.Queue(maxsize=self.config.queue_size * 2)
         self._stop_event = threading.Event()
         self._running = False
 
@@ -244,6 +252,8 @@ class AudioRecorder:
         self._output_paths: dict[str, Path | None] = {"mic": None, "loopback": None}
         self._wav_handles: dict[str, Any] = {"mic": None, "loopback": None}
         self._writer_thread: threading.Thread | None = None
+        # populated by optional calibration in start()
+        self._calibrated_mic_rms: float | None = None
 
     def start(self, output_paths: dict[str, str | Path | None] | None = None) -> None:
         """Start microphone and loopback capture and begin writing audio to disk."""
@@ -267,10 +277,25 @@ class AudioRecorder:
         self.start_mic()
         self.start_loopback()
 
-        self._writer_thread = threading.Thread(target=self._write_loop, daemon=True)
-        self._writer_thread.start()
+        # Optionally run a quick noise-floor calibration on the mic so the
+        # transcription VAD threshold can be set dynamically. This is useful
+        # because room noise and mic gain vary a lot between setups.
+        try:
+            if getattr(self.config, "calibrate_seconds", 0.0) and self.config.calibrate_seconds > 0.0:
+                self._calibrate_mic_noise_floor(self.config.calibrate_seconds)
+        except Exception:
+            # calibration must not break startup
+            logger.exception("Mic calibration failed")
+
+        # Only start the writer thread if we're actually saving audio.
+        if any(handle is not None for handle in self._wav_handles.values()):
+            self._writer_thread = threading.Thread(
+                target=self._write_loop,
+                daemon=True,
+            )
+            self._writer_thread.start()
+
         self._running = True
-        logger.info("Audio capture service started")
 
     def stop(self) -> None:
         """Stop capture streams, flush pending audio, and close files."""
@@ -342,15 +367,18 @@ class AudioRecorder:
             self._mic_device = self.device_manager.get_default_microphone()
 
         samplerate = int(self._mic_device.get("default_samplerate", self.config.sample_rate_output))
+        print(f"[MIC] Sample rate: {samplerate}")
         blocksize = self._chunk_size_for_rate(samplerate)
         logger.info("Starting microphone stream at %s Hz with block size %s", samplerate, blocksize)
-
+        print(f"Mic sample rate: {samplerate}")
+        print(f"Mic channels: {self._mic_channels}")
         self._mic_stream = sd.InputStream(
             device=int(self._mic_device.get("index", -1)),
             channels=self._mic_channels,
             samplerate=samplerate,
             blocksize=blocksize,
             dtype="int16",
+            latency= 'high',
             callback=self._mic_callback_impl,
         )
         self._mic_stream.start()
@@ -431,20 +459,14 @@ class AudioRecorder:
         self._wav_handles = {"mic": None, "loopback": None}
 
     def _write_loop(self) -> None:
-        while not self._stop_event.is_set() or not self._mic_queue.empty() or not self._loopback_queue.empty():
-            wrote_any = False
-            for source in ("mic", "loopback"):
-                queue_obj = self._mic_queue if source == "mic" else self._loopback_queue
-                try:
-                    chunk = queue_obj.get(timeout=0.05)
-                except queue.Empty:
-                    continue
-                handle = self._wav_handles.get(source)
-                if handle is not None and chunk.audio:
-                    handle.writeframes(chunk.audio)
-                wrote_any = True
-            if not wrote_any:
-                time.sleep(0.001)
+        while not self._stop_event.is_set() or not self._writer_queue.empty():
+            try:
+                chunk = self._writer_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            handle = self._wav_handles.get(chunk.source)
+            if handle is not None and chunk.audio:
+                handle.writeframes(chunk.audio)
 
     def _enqueue_chunk(self, source: str, audio_bytes: bytes) -> None:
         queue_obj = self._mic_queue if source == "mic" else self._loopback_queue
@@ -464,16 +486,64 @@ class AudioRecorder:
                 pass
             queue_obj.put_nowait(chunk)
 
+        # Recording is a second consumer, so it needs a separate queue.
+        if self._wav_handles.get(source) is not None:
+            try:
+                self._writer_queue.put_nowait(chunk)
+            except queue.Full:
+                logger.warning("Recording queue full; dropping %s WAV chunk", source)
+
+    def _calibrate_mic_noise_floor(self, seconds: float) -> None:
+        """Sample incoming mic chunks for `seconds` and compute a baseline RMS.
+        The result is stored in `self._calibrated_mic_rms` as an int RMS value
+        in the same units `transcribe.rms()` uses (sample amplitude units).
+        """
+        import statistics
+
+        if seconds <= 0.0:
+            self._calibrated_mic_rms = None
+            return
+
+        end = time.monotonic() + float(seconds)
+        samples: list[float] = []
+        # Pull whatever mic chunks arrive for the calibration window
+        while time.monotonic() < end:
+            chunk = self.get_mic_chunk(timeout=0.2)
+            if chunk is None:
+                continue
+            try:
+                arr = np.frombuffer(chunk.audio, dtype=np.int16)
+                if arr.size == 0:
+                    continue
+                rms_val = float(np.sqrt(np.mean(np.square(arr.astype(np.float64)))))
+                samples.append(rms_val)
+            except Exception:
+                continue
+
+        if samples:
+            # median is robust to transient speech bursts during calibration
+            self._calibrated_mic_rms = float(statistics.median(samples))
+        else:
+            self._calibrated_mic_rms = None
+        print(f"[audio] mic calibration -> median_rms={self._calibrated_mic_rms}")
+
+    def get_calibrated_mic_rms(self) -> float | None:
+        return self._calibrated_mic_rms
+
     def _mic_callback_impl(self, indata: np.ndarray, frames: int, time_info: dict[str, Any], status: Any) -> None:
         """Queue microphone PCM bytes without doing any extra processing."""
         if status:
+            print(f"[MIC STATUS] {status}")
             logger.warning("Microphone stream status: %s", status)
         if self._stop_event.is_set():
             return None
 
         audio = np.asarray(indata, dtype=np.int16)
         if audio.ndim == 2:
-            audio = np.mean(audio, axis=1).astype(np.int16)
+            # A headset can expose two channels while only one carries speech.
+            # Averaging can weaken or cancel the useful channel.
+            channel_rms = np.sqrt(np.mean(audio.astype(np.float64) ** 2, axis=0))
+            audio = audio[:, int(np.argmax(channel_rms))]
         else:
             audio = audio.reshape(-1).astype(np.int16)
 
@@ -483,6 +553,7 @@ class AudioRecorder:
     def _loopback_callback_impl(self, in_data: bytes, frame_count: int, time_info: dict[str, Any], status: Any) -> tuple[None, int]:
         """Queue loopback PCM bytes without doing any extra processing."""
         if status:
+            print(f"[LOOPBACK STATUS] {status}")
             logger.warning("Loopback stream status: %s", status)
         if self._stop_event.is_set() or not in_data:
             return None, pyaudio.paContinue

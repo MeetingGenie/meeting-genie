@@ -107,6 +107,10 @@ class MeetingGenie:
         # self._ask_brain() after enough silence.
         self.trigger.feed(utterance)
 
+    def _on_audio_activity(self, source: str, timestamp: float) -> None:
+        """Called for live voiced frames, before an utterance is complete."""
+        self.trigger.mark_audio_activity(timestamp)
+
     def _append_transcript(self, utterance) -> None:
         try:
             import json
@@ -124,6 +128,11 @@ class MeetingGenie:
 
     def _ask_brain(self, questions: list[str]) -> None:
         print("[Main] Asking brain:", questions)
+
+        print("\n========== RECENT TRANSCRIPT ==========")
+        print(self._recent_transcript_text())
+        print("=======================================\n")
+
         self.brain.submit(
             questions=questions,
             recent_transcript=self._recent_transcript_text(),
@@ -159,11 +168,14 @@ class MeetingGenie:
         self.brain.start()        # its own worker thread + prewarm
         self.summarizer.start() 
         self.trigger.start()    # its own timer thread
-        self.recorder.start()     # audio callbacks on their own threads
+        output_paths = {
+        "mic": self.meeting_dir / "meeting_mic.wav",
+        "loopback": self.meeting_dir / "meeting_loopback.wav",}
 
+        self.recorder.start(output_paths)
         transcribe_thread = threading.Thread(
             target=run_transcription_loop,
-            args=(self.recorder, self.cfg, self._on_utterance),
+            args=(self.recorder, self.cfg, self._on_utterance, self._on_audio_activity),
             daemon=True,
             name="TranscribeLoop",
         )
@@ -190,18 +202,27 @@ class MeetingGenie:
 
     def shutdown(self) -> None:
         print("Shutting down...")
+
         try:
             self.recorder.stop()
         except Exception:
             pass
+
+        try:
+            self.trigger.stop()
+        except Exception:
+            pass
+
         try:
             self.summarizer.stop()
         except Exception:
             pass
+
         try:
             self.brain.stop()
         except Exception:
             pass
+
         print(f"Done. Output in: {self.meeting_dir}")
 
 

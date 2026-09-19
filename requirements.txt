@@ -1,7 +1,11 @@
-faster-whisper
+# STT: Parakeet TDT via onnx-asr (replaced faster-whisper).
+# Pure Python, no PyTorch, no CUDA. huggingface-hub is what downloads the
+# model on first run.
+onnx-asr[hub]
+onnxruntime
 sounddevice
 PyAudioWPatch; sys_platform == 'win32'
-webrtcvad
+webrtcvad-wheels
 rapidfuzz
 numpy
 scipy

@@ -269,7 +269,8 @@ class Brain:
         Do not mention the summary.
         Do not say the summary is empty.
         Begin immediately with the answer.
-        Keep the response under {self.num_predict} tokens.
+        Keep the response under {self.num_predict} tokens, however explain the answer a little bit.
+        Make it minimum two lines.
         """
         return prompt
 
